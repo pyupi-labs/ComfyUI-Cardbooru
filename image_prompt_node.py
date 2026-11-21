@@ -37,7 +37,9 @@ def prepare_prompts(image, sampler_id='', replace_underscores=True, preserve_sco
         if not isinstance(text, str):
             raise ValueError('Prompt overrides must be strings')
         if replace_underscores:
-            text = CardbooruConcatenateSpaces().concatenate(text, '', '', preserve_score_tags, False)[0]
+            text = CardbooruConcatenateSpaces().concatenate(
+                text, preserve_score_tags=preserve_score_tags, clean_commas=False,
+                merge_character_counts=False)[0]
         result[key] = clean_prompt_commas(text) if clean_commas else text
     return result
 

@@ -1,73 +1,82 @@
 # ComfyUI-Cardbooru
 
-Custom nodes for browsing PNG character cards, formatting Anima prompts, and loading images with prompts reconstructed from supported metadata. Designed for ComfyUI portable on Windows. Cardbooru Desktop is optional.
+Browse PNG character cards in ComfyUI and reuse the prompts embedded in them. Pick a character, switch variants, and edit the prompt for your current workflow. The package also includes prompt concatenators and an image loader for recovering saved prompts.
+
+Designed for ComfyUI portable on Windows. Cardbooru Desktop is optional.
 
 ## Installation
 
-Download and extract the repository into `ComfyUI/custom_nodes/ComfyUI-Cardbooru`, or run the following command from `ComfyUI/custom_nodes`:
+Extract the package into `ComfyUI/custom_nodes/ComfyUI-Cardbooru`, or run this from `ComfyUI/custom_nodes`:
 
 ```powershell
 git clone https://github.com/pyupi-labs/ComfyUI-Cardbooru.git
 ```
 
-Restart ComfyUI and hard-refresh the browser with Ctrl+F5. If you already installed the older `cardbooru_nodes` folder, replace that copy to avoid duplicate node registrations.
+Restart ComfyUI and press Ctrl+F5 in the browser. If you have an older installation named `cardbooru_nodes`, replace it to avoid duplicate registrations.
 
-| Node | Stable internal ID | Outputs |
-| --- | --- | --- |
-| Cardbooru · Positive | `CardbooruPositive` | positive STRING |
-| Cardbooru · Positive + Negative | `CardbooruPrompts` | positive / negative STRING |
-| Concatenate · Anima | `CardbooruConcatenateAnima` | text STRING |
-| Concatenate · Anima Advanced | `CardbooruConcatenateSpaces` | text STRING |
-| Concatenate · x3 | `CardbooruConcatenate3` | text STRING |
-| Concatenate · x4 | `CardbooruConcatenate4` | text STRING |
-| Cardbooru · Load Image + Prompts | `CardbooruLoadImagePrompts` | IMAGE / MASK / positive STRING / negative STRING |
+## Character cards
 
-Text outputs connect to text-encoder string inputs, not directly to CONDITIONING. MASK may remain disconnected.
+### Cardbooru · Positive + Negative
 
-## Card library nodes
+Select one card and get separate positive and negative `STRING` outputs. A card without a negative prompt returns an empty negative string. You can edit and reset each prompt independently.
 
-- Set `library_root` to a folder on the ComfyUI server, or a full card PNG path to use its parent folder. Empty uses ComfyUI/input. Search is recursive. **Library** opens the searchable thumbnail picker.
-- Embedded labels take precedence over filenames. Both `Uraraka Ochaco (Base) [Boku no Hero Academia].png` and legacy underscore names work. Filename fallback cannot recover a missing prompt. Folder names and English aliases do not define the series; keep embedded series names consistent.
-- Identity uses character + series + variant, Unicode NFKC/casefold, collapsed whitespace, and equivalent underscores/spaces. Accents remain. Duplicate copies with identical positive/negative pairs appear once; conflicting pairs are excluded with a warning. No files are deleted.
-- Arrows cycle within the selected character/series, main variants first, then alphabetical order. **Base** jumps to that group's valid Base variant; disabled when absent or already selected. It does not remove clothing tags or redefine main.
-- Prompt fields are editable. Typing enables their override flags. **↺ Positive** / **↺ Negative** restore embedded text independently. Missing negatives are empty strings. Edits are stored in the workflow and never written to PNGs.
-- **Delete** clears the card selection, image preview, prompt fields, and overrides in both card nodes. It preserves `library_root` and never deletes files. Empty nodes output empty strings, including when the library is unavailable. The cleared state survives Refresh/workflow restoration; selecting another card resumes normal behavior. Changing the root permits its initial-card selection again.
-- Library opening and workflow restoration preserve edits for the same source. **Refresh** rereads disk metadata, clears metadata/thumbnail caches, replaces existing local edits, and disables overrides. New typing after a request starts is protected. Switching variants also clears edits; edits are not remembered per variant.
-- Dropping a PNG matches it inside the configured library; browsers do not reveal its original folder. This does not import the file.
-- Metadata scanning skips pixel chunks. Cached thumbnails are generated on demand (up to 320 × 448, 128 entries). Card preview height grows within 160–640 pixels; enlargement may look softer. Performance is not benchmarked.
+### Cardbooru · Positive
 
-## Plain concatenation
+Select a card and get its positive prompt as a `STRING`. Use this when your workflow supplies the negative prompt separately.
 
-**Concatenate · x3** and **Concatenate · x4** join A/B/C or A/B/C/D exactly with a shared delimiter at every boundary, including empty inputs. No cleanup, switches, Advanced variants, or Preview. Underscores, commas, whitespace and duplicates are preserved. For cleanup, pass the result to Anima Advanced with its other input and delimiter empty. Image prompt reconstruction supports both nodes.
+### Using the card nodes
 
-Former Anima 3 IDs remain registered as deprecated compatibility nodes with their original cleanup behavior, preserving saved workflows and PNG reconstruction. Use x3/x4 for new workflows.
+1. Set `library_root` to a folder on the ComfyUI server. The nodes search its subfolders and wait for a configured path when the field is empty. A full card PNG path uses that card's parent folder.
+2. Click **Library** to search by character, variant, or series. You can also drop a PNG that already exists in the configured library.
+3. Use the arrows to cycle through variants of the same character and series. **Base** jumps to the Base variant when available.
+4. Connect the prompt output to a text encoder's string input. You can edit the prompt in the node, and the workflow saves the edit.
 
-## Concatenate · Anima
+`use_edited_positive` and `use_edited_negative` start enabled where available. Turn a control off to use the corresponding prompt directly from the PNG. **↺ Positive** and **↺ Negative** restore the corresponding embedded text. **Refresh** rereads the selected card from disk and replaces local prompt edits. **Delete** clears the selection and prompt fields while keeping the library path and the PNG file.
 
-The two-input nodes join `string_a + delimiter + string_b`, then convert underscores to spaces. Convert string widgets to inputs to connect upstream nodes. Delimiter defaults to empty; use `, ` for tag lists. A single string can be normalized with the other input and delimiter empty.
+Card labels embedded in the PNG take priority over filenames. Filenames with spaces and legacy underscores are supported. Identical copies appear once. Cards with the same character, series, and variant but conflicting prompts are excluded with a warning.
 
-The simple node always preserves standalone `score_1`–`score_9` and cleans empty top-level comma fields. Advanced exposes `preserve_score_tags` and `clean_commas`, both initially on. Cleanup removes leading/trailing/repeated top-level commas and trims field boundaries, retaining order, repeated tags, weights, nested syntax, and escaped commas. With cleanup off, delimiters/whitespace remain exact. Underscores in other identifiers are also converted: use this for prompt text intended for conversion.
+## Prompt tools
 
-Advanced **Preview** shows its exact string from the last execution. Opening it does not evaluate upstream nodes; execute again after edits. The simple node has no preview. Existing configurable nodes retain their internal ID and now appear as Advanced.
+### Concatenate · Clean
 
-The Anima model card recommends spaces for regular tags and underscores for score tags. This is formatting support, not a measured image-quality improvement or a tokenizer guarantee. [Anima reference](https://huggingface.co/circlestone-labs/Anima#prompting).
+Joins two strings using the chosen delimiter. Use `, ` for a comma-separated tag list. The node converts underscores to spaces, preserves `score_1` through `score_9`, removes empty comma fields, and combines character-count tags. All cleanup options are enabled.
 
-## Load Image + Prompts
+### Concatenate · Clean Advanced
 
-Use **Choose file to upload** to select a local file through the browser, or choose an existing input image from the native image list. Prompts and extraction status load immediately. Image/mask conversion delegates to the installed built-in LoadImage. Only the native image preview is shown.
+Applies the same defaults and gives you independent switches for `preserve_score_tags`, `clean_commas`, and `merge_character_counts`. **Preview** shows the exact string from the last execution. Run the workflow again to see the effect of edits.
 
-- `replace_underscores`, `preserve_score_tags`, and `clean_commas` control both outputs and default on. These cannot undo transformations already applied by the original generation graph.
-- Typing enables independent `use_edited_positive` / `use_edited_negative` flags. Cleanup also applies to edited output. Refresh rereads metadata and replaces both edits; changing images clears them. Same-image workflow restoration preserves edits.
-- Editable fields remain inputs; execution does not replace them with processed outputs. Preview shows the executed result. Both overrides may be enabled to supply prompts manually even if the saved graph cannot be read. New edits made during a pending refresh are preserved.
-- New nodes start with an empty image selection. **Delete** clears the image, prompts, and previews while keeping the folder and files. Select another image before running this node.
-- **Refresh**, **Preview**, and **Delete** share a row. Preview shows the exact positive/negative strings from this node's last execution, including edits and cleanup. It updates while open. It is not a live upstream evaluation or a reader of the newly generated output image. Runtime snapshots are not saved in workflow files.
-- Extraction prioritizes sampler connections over partial Positive Prompt titles. It supports chained built-in/Anima concatenators, saved Cardbooru text, primitive strings, common encoders/conditioning wrappers, and guiders. Unknown nodes, cycles, and unresolvable paths report errors rather than silently returning partial text.
-- With several sampling stages, status lists IDs and the selected first sampler. `sampler_id` is an advanced widget and retains saved values. Show advanced widgets to choose another stage. Conditioning merges are listed with a warning, not represented as equivalent conditioning math.
-- Supported metadata: execution `prompt` JSON or A1111 `parameters`. PNG text scanning includes compressed/post-IDAT chunks without decoding pixels. Other supported image formats use available Pillow text metadata; lost metadata and a visual `workflow` alone cannot restore runtime text.
-- Cardbooru outputs reconstructed from saved widgets with overrides off are explicitly flagged as snapshots: the exact original external-card output may not have been stored. Missing snapshots cannot be guessed. No external card path is reopened.
+These two nodes were originally named **Concatenate · Anima** and **Concatenate · Anima Advanced**. Their internal IDs are unchanged, so existing workflows can still load them.
 
-DOM buttons use shared dark theme-aware styling. The upload button uses the native browser file chooser.
+#### How character counts work
+
+The nodes process standalone, comma-separated count tags independently for `girl`, `boy`, and `other`.
+
+| Input | Output |
+| --- | --- |
+| `1girl, mei mei, 1girl, 1girl` | `3girls, mei mei` |
+| `2girls, 1girl, 1girl` | `2girls` |
+| `2boys, 2boys, 1other, 1other` | `2boys, 2others` |
+
+A count generated from singles replaces the first singleton. An explicit plural count takes priority and stays where it first appeared. Identical plurals collapse to one, and different explicit totals such as `2girls, 3girls` are kept. Weighted and nested counts, prose, and other repeated tags are outside the count pass.
+
+### Concatenate · x3
+
+Joins three strings in A, B, C order using one delimiter between inputs. It preserves the input text, including empty inputs.
+
+### Concatenate · x4
+
+Joins four strings in A, B, C, D order the same way. To clean the result from either node, pass it to **Concatenate · Clean** or **Clean Advanced** with the second input and delimiter empty.
+
+## Image and prompt recovery
+
+### Cardbooru · Load Image + Prompts
+
+Choose an image from the input list or use **Choose file to upload**. The node shows the image and recovered prompts, and outputs `IMAGE`, `MASK`, positive `STRING`, and negative `STRING`. You can leave the mask output disconnected.
+
+Selecting an image loads its prompts automatically. Edits in either field are used automatically. Use `replace_underscores`, `preserve_score_tags`, and `clean_commas` to adjust both outputs. **Refresh** rereads the image metadata and replaces local edits. **Preview** shows the resulting positive and negative strings from the last execution. **Delete** clears the image selection and prompt fields.
+
+The loader supports ComfyUI execution `prompt` metadata and A1111 `parameters`. It follows sampler connections through supported text and conditioning nodes. If an image contains several sampling stages, open the advanced options and use `sampler_id` to select the stage listed in the status. Unsupported nodes and missing metadata can limit recovery, and saved Cardbooru text may be reported as a snapshot.
 
 ## Reporting issues
 
-When opening a GitHub issue, include your ComfyUI and frontend versions, the affected node, steps to reproduce the issue, and any relevant error messages.
+Include your ComfyUI and frontend versions, the affected node, steps to reproduce the issue, and relevant error messages.

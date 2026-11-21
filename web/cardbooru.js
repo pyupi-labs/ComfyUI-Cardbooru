@@ -25,6 +25,8 @@ app.registerExtension({
             const root = node.widgets.find((w) => w.name === "library_root");
             const selected = node.widgets.find((w) => w.name === "card");
             const edited = node.widgets.find((w) => w.name === "use_edited_prompt");
+            // Keep the serialized input name for existing workflows and API prompts.
+            edited.label = "use_edited_positive";
             const prompt = node.widgets.find((w) => w.name === "positive_prompt");
             const editors = [{key: "positive", prompt, edited}];
             if (combined) editors.push({
@@ -35,11 +37,11 @@ app.registerExtension({
             node.properties ||= {};
             for (const editor of editors) editor.editVersion = 0;
             let cards = [], revision = 0, picker = null, disposed = false;
-            let currentCard = null, previewHeight = 220;
+            let currentCard = null;
             const box = element("div");
-            box.style.cssText = "color:var(--input-text,#eee);padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;height:100%;font:13px system-ui;overflow:auto";
+            box.style.cssText = "color:var(--input-text,#eee);padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;height:100%;font:13px system-ui";
             const controls = element("div", "", box);
-            controls.style.cssText = "display:flex;gap:6px;flex-wrap:wrap";
+            controls.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0";
             const open = element("button", "Library", controls);
             const refresh = element("button", "Refresh", controls);
             refresh.title = "Reread card metadata from disk and replace local prompt edits";
@@ -56,25 +58,29 @@ app.registerExtension({
             const remove = element("button", "Delete", controls);
             remove.title = "Clear this node's selection and prompts; keep the PNG in the library";
             const label = element("div", "Select a card", box);
+            label.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0";
             const image = element("img", "", box);
             image.alt = "Card preview";
-            image.style.cssText = "width:100%;height:220px;min-height:120px;flex-shrink:0;object-fit:contain;display:none";
-            const status = element("div", "Drop a PNG from the configured library here.", box);
-            status.style.cssText = "white-space:pre-wrap;font-size:12px;max-height:80px;overflow:auto;flex-shrink:0";
+            image.style.cssText = "width:100%;min-height:0;flex:1 1 0;object-fit:contain;display:none";
+            const libraryHint = () => root.value?.trim() ? "Drop a PNG from the configured library here." : "Set library_root to browse cards.";
+            const status = element("div", libraryHint(), box);
+            status.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:16px;height:32px;overflow:auto;flex-shrink:0";
             const preview = node.addDOMWidget("cardbooru_preview", "cardbooru", box, { serialize: false });
-            preview.computeSize = (width) => [width, previewHeight + 110];
+            preview.computeLayoutSize = () => {
+                const width = node.size[0];
+                const imageSpace = currentCard ? Math.round(Math.min(440, Math.max(180, width * 0.62))) : 0;
+                const buttonSpace = controls.offsetHeight || 62;
+                const minHeight = buttonSpace + 84 + imageSpace;
+                return {minWidth: 0, minHeight, maxHeight: currentCard ? Infinity : minHeight};
+            };
             // Keep standard serialized multiline editors below the shared preview.
             for (const editor of editors) {
+                // Let ComfyUI distribute extra height across the preview and editors.
+                editor.prompt.computeLayoutSize = () => ({minWidth: 0, minHeight: 78, maxHeight: Infinity});
                 node.widgets.splice(node.widgets.indexOf(editor.prompt), 1);
                 node.widgets.push(editor.prompt);
             }
-            node.size = [420, combined ? 850 : 650];
-            const resized = node.onResize;
-            node.onResize = function (size) {
-                resized?.apply(this, arguments);
-                previewHeight = Math.round(Math.max(160, Math.min(640, size[0] * 0.85, size[1] * 0.45)));
-                image.style.height = `${previewHeight}px`;
-            };
+            node.size = [420, combined ? 460 : 340];
             function setPrompt(editor, value) {
                 editor.prompt.value = value;
                 if (editor.prompt.inputEl) editor.prompt.inputEl.value = value;
@@ -96,7 +102,6 @@ app.registerExtension({
             }
             function resetEditor(editor) {
                 if (!currentCard) return;
-                editor.edited.value = false;
                 editor.editVersion++;
                 setPrompt(editor, currentCard[editor.key] ?? "");
                 node.graph?.setDirtyCanvas(true, true);
@@ -127,7 +132,6 @@ app.registerExtension({
                 node.properties.cardbooruSelectionCleared = true;
                 for (const editor of editors) {
                     editor.editVersion++;
-                    editor.edited.value = false;
                     setPrompt(editor, "");
                 }
                 clear();
@@ -140,7 +144,6 @@ app.registerExtension({
                 for (const editor of editors) {
                     if (versions && versions[editor.key] !== editor.editVersion) continue;
                     if (reloadPrompts || !sameSource || !editor.edited.value) {
-                        editor.edited.value = false;
                         setPrompt(editor, c[editor.key] ?? "");
                     }
                 }
@@ -149,7 +152,10 @@ app.registerExtension({
                 selected.value = c.path;
                 node.properties.cardbooruSelectionCleared = false;
                 label.textContent = `${c.character} / ${c.variant || "No variant"} / ${c.series}`;
+                label.title = label.textContent;
                 image.src = thumb(c); image.style.display = "block";
+                const minimum = node.computeSize?.();
+                if (minimum && minimum[1] > node.size[1]) node.setSize([node.size[0], minimum[1]]);
                 const count = cards.filter((other) => group(other) === group(c)).length;
                 previous.disabled = next.disabled = count < 2;
                 base.disabled = !cards.some((other) => group(other) === group(c) && other.is_base && other.path !== c.path);
@@ -159,6 +165,10 @@ app.registerExtension({
                 const ticket = ++revision;
                 const versions = Object.fromEntries(editors.map(e => [e.key, e.editVersion]));
                 clear();
+                if (!root.value?.trim()) {
+                    status.textContent = libraryHint();
+                    return false;
+                }
                 status.textContent = "Loading library…";
                 try {
                     const data = await request(`/cardbooru/library?${query(reloadPrompts ? {refresh: "1"} : {})}`, {cache: "no-store"});

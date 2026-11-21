@@ -15,7 +15,8 @@ app.registerExtension({
             const editors = ["positive", "negative"].map(key => ({key,
                 editVersion: 0,
                 prompt: widget(`${key}_prompt`), edited: widget(`use_edited_${key}`)}));
-            let revision = 0, disposed = false, latest = null;
+            let revision = 0, disposed = false;
+            let imageReloadQueued = false;
             const box = document.createElement("div");
             box.style.cssText = "padding:8px;box-sizing:border-box;height:100%;overflow:auto;color:var(--input-text,#eee)";
             const refresh = document.createElement("button");
@@ -41,25 +42,32 @@ app.registerExtension({
             controls.append(refresh, previewButton, clearButton);
             const status = document.createElement("p");
             status.style.cssText = "white-space:pre-wrap;max-height:100px;overflow:auto;font:12px system-ui";
-            // Keep ComfyUI's native preview and use the server folder picker for browsing.
+            // ComfyUI supplies the native image preview.
             box.append(controls, status);
             const dom = node.addDOMWidget("image_prompt_status", "cardbooru", box, {serialize: false});
             dom.computeSize = width => [width, 140];
             for (const editor of editors) {
+                // Preserve serialized widget positions and API inputs for older workflows.
+                editor.edited.hidden = true;
                 node.widgets.splice(node.widgets.indexOf(editor.prompt), 1);
                 node.widgets.push(editor.prompt);
             }
             node.size = [460, 760];
             function setText(editor, text) {
-                editor.prompt.value = text;
-                if (editor.prompt.inputEl) editor.prompt.inputEl.value = text;
+                editor.updating = true;
+                try {
+                    editor.prompt.value = text;
+                    if (editor.prompt.inputEl) editor.prompt.inputEl.value = text;
+                } finally {
+                    editor.updating = false;
+                }
             }
             function apply(data, reset = false, versions = null) {
-                latest = data;
                 for (const editor of editors) {
                     if (versions && versions[editor.key] !== editor.editVersion) continue;
                     if (reset || !editor.edited.value) {
                         editor.edited.value = false;
+                        delete node.properties.cardbooruManualPrompts?.[editor.key];
                         setText(editor, data[editor.key] ?? "");
                     }
                 }
@@ -70,8 +78,8 @@ app.registerExtension({
                 const ticket = ++revision;
                 const image = widget("image").value;
                 if (!image) {
-                    latest = null;
                     delete node.properties.cardbooruLoadedImage;
+                    delete node.properties.cardbooruManualPrompts;
                     node.imgs = null;
                     node.imageIndex = null;
                     for (const editor of editors) {
@@ -85,8 +93,9 @@ app.registerExtension({
                 }
                 const changed = node.properties.cardbooruLoadedImage !== image;
                 if (changed) {
-                    latest = null;
+                    delete node.properties.cardbooruManualPrompts;
                     for (const editor of editors) {editor.edited.value = false; setText(editor, "");}
+                    node.properties.cardbooruLoadedImage = image;
                 }
                 const versions = Object.fromEntries(editors.map(e => [e.key, e.editVersion]));
                 status.textContent = "Reading prompt metadata…";
@@ -98,12 +107,31 @@ app.registerExtension({
                     const data = await response.json();
                     if (disposed || ticket !== revision) return;
                     if (!response.ok) throw new Error(data.error || `Error ${response.status}`);
-                    node.properties.cardbooruLoadedImage = image;
-                    apply(data, reset || changed, versions);
+                    apply(data, reset, versions);
                 } catch (error) {if (!disposed && ticket === revision) status.textContent = error.message;}
             }
             refresh.onclick = () => load(true);
-            for (const name of ["image", "sampler_id", "replace_underscores", "preserve_score_tags", "clean_commas"]) {
+            function imageSelected() {
+                if (imageReloadQueued) return;
+                imageReloadQueued = true;
+                queueMicrotask(() => {
+                    imageReloadQueued = false;
+                    if (!disposed) load(true);
+                });
+            }
+            const imageWidget = widget("image");
+            const imageCallback = imageWidget.callback;
+            imageWidget.callback = function () {
+                imageCallback?.apply(this, arguments);
+                imageSelected();
+            };
+            // The native uploader reports completion here even if it replaces the combo callback.
+            const widgetChanged = node.onWidgetChanged;
+            node.onWidgetChanged = function (name) {
+                widgetChanged?.apply(this, arguments);
+                if (name === "image") imageSelected();
+            };
+            for (const name of ["sampler_id", "replace_underscores", "preserve_score_tags", "clean_commas"]) {
                 const input = widget(name), callback = input.callback;
                 input.callback = function () {callback?.apply(this, arguments); load();};
             }
@@ -111,15 +139,11 @@ app.registerExtension({
                 const callback = editor.prompt.callback;
                 editor.prompt.callback = function () {
                     callback?.apply(this, arguments);
+                    if (editor.updating) return;
                     editor.edited.value = true;
+                    (node.properties.cardbooruManualPrompts ??= {})[editor.key] = true;
                     editor.editVersion++;
                     node.graph?.setDirtyCanvas(true, true);
-                };
-                const toggle = editor.edited.callback;
-                editor.edited.callback = function () {
-                    toggle?.apply(this, arguments);
-                    editor.editVersion++;
-                    if (!editor.edited.value && latest) setText(editor, latest[editor.key] ?? "");
                 };
             }
             const executed = node.onExecuted;
@@ -129,7 +153,17 @@ app.registerExtension({
                 if (message?.image?.[0] === widget("image").value && message?.status?.[0]) status.textContent = message.status[0];
             };
             const configured = node.onConfigure;
-            node.onConfigure = function () {configured?.apply(this, arguments); load();};
+            node.onConfigure = function () {
+                configured?.apply(this, arguments);
+                for (const editor of editors) {
+                    editor.edited.hidden = true;
+                    // Older workflows can have an enabled override with an uninitialized editor.
+                    if (!editor.prompt.value && !node.properties.cardbooruManualPrompts?.[editor.key]) {
+                        editor.edited.value = false;
+                    }
+                }
+                load();
+            };
             const removed = node.onRemoved;
             node.onRemoved = function () {disposed = true; revision++; removed?.apply(this, arguments);};
             load();

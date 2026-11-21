@@ -106,8 +106,11 @@ def identity(card):
     return tuple(normalize(card[k]) for k in ('character', 'series', 'variant'))
 
 
-def resolve_root(value, default):
-    path = Path(value.strip().strip('"') or default).expanduser().resolve()
+def resolve_root(value):
+    value = value.strip().strip('"').strip()
+    if not value:
+        raise ValueError('Set library_root to a card library folder.')
+    path = Path(value).expanduser().resolve()
     if path.is_file() and path.suffix.lower() == '.png':
         path = path.parent
     if not path.is_dir():

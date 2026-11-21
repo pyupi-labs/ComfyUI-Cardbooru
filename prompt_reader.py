@@ -85,13 +85,16 @@ class GraphReader:
             if kind == 'CardbooruConcatenateAnima':
                 return CardbooruConcatenateAnima().concatenate(a, b, delimiter)[0]
             return CardbooruConcatenateSpaces().concatenate(a, b, delimiter,
-                        value('preserve_score_tags', True), value('clean_commas', True))[0]
+                        value('preserve_score_tags', True), value('clean_commas', True),
+                        value('merge_character_counts', False))[0]
         if kind == 'Text Concatenate':
             return text('delimiter').join(text(k) for k in ('text_a', 'text_b', 'text_c', 'text_d') if k in inputs)
         if kind in ('CardbooruPositive', 'CardbooruPrompts'):
             polarity = 'negative' if slot == 1 and kind == 'CardbooruPrompts' else 'positive'
             if slot not in ((0, 1) if kind == 'CardbooruPrompts' else (0,)):
                 raise PromptReadError(f'Invalid Cardbooru output: {slot}')
+            if inputs.get('card') == '':
+                return ''
             key = polarity + '_prompt'
             flag = 'use_edited_negative' if polarity == 'negative' else 'use_edited_prompt'
             if key not in inputs:
@@ -107,7 +110,9 @@ class GraphReader:
                 raise PromptReadError('A linked image metadata reader did not save its original output; use its edited text explicitly')
             result = text(polarity + '_prompt')
             if value('replace_underscores', True):
-                result = CardbooruConcatenateSpaces().concatenate(result, '', '', value('preserve_score_tags', True), False)[0]
+                result = CardbooruConcatenateSpaces().concatenate(
+                    result, preserve_score_tags=value('preserve_score_tags', True), clean_commas=False,
+                    merge_character_counts=False)[0]
             if value('clean_commas', True):
                 from .text_nodes import clean_prompt_commas
                 result = clean_prompt_commas(result)
@@ -148,22 +153,31 @@ class GraphReader:
 
     def _pair(self, node_id, seen):
         seen = seen | {node_id}
-        inputs = self.graph[node_id]['inputs']
+        node = self.graph.get(node_id)
+        if not isinstance(node, dict) or not isinstance(node.get('inputs'), dict):
+            raise PromptReadError(f'Missing sampling source or inputs: {node_id}')
+        if node.get('class_type') == 'DualCFGGuider':
+            raise PromptReadError(f'DualCFGGuider {node_id} has two positive conditioning inputs; a single prompt cannot represent them')
+        inputs = node['inputs']
+        guider_link = inputs.get('guider')
+        if 'guider' in inputs:
+            if (not isinstance(guider_link, list) or len(guider_link) != 2
+                    or type(guider_link[1]) is not int or guider_link[1] != 0):
+                raise PromptReadError('Invalid guider link')
+            guider = self.graph.get(str(guider_link[0]))
+            if not isinstance(guider, dict) or not isinstance(guider.get('inputs'), dict):
+                raise PromptReadError('Missing guider or inputs')
         result = {}
         for polarity, keys in [('positive', ('positive', 'conditioning_positive', 'pos')),
                                ('negative', ('negative', 'conditioning_negative', 'neg', 'nag_negative'))]:
             key = next((k for k in keys if k in inputs), None)
             if key:
                 result[polarity] = self.text(inputs[key])
-            elif 'guider' in inputs:
-                link = inputs['guider']
-                if not isinstance(link, list) or str(link[0]) not in self.graph:
-                    raise PromptReadError('Invalid guider link')
-                guider = self.graph[str(link[0])]
+            elif guider_link is not None:
                 if guider.get('class_type') == 'BasicGuider':
-                    result[polarity] = self.text(link) if polarity == 'positive' else ''
+                    result[polarity] = self.text(guider_link) if polarity == 'positive' else ''
                 else:
-                    result[polarity] = self.pair(str(link[0]), seen)[polarity]
+                    result[polarity] = self.pair(str(guider_link[0]), seen)[polarity]
             else:
                 result[polarity] = ''
         return result
@@ -182,7 +196,7 @@ def extract_graph(graph, sampler_id=''):
         candidates = [sampler_id]
     if candidates:
         # Prefer actual samplers over their guiders and conditioning helper nodes.
-        samplers = [key for key in candidates if 'sampler' in graph[key].get('class_type', '').lower()]
+        samplers = [key for key in candidates if 'sampler' in str(graph[key].get('class_type', '')).lower()]
         candidates = samplers or candidates
         pair = reader.pair(candidates[0])
         if len(candidates) > 1:

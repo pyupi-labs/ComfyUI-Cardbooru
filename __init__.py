@@ -5,7 +5,6 @@ from collections import OrderedDict
 from pathlib import Path
 from threading import RLock
 
-import folder_paths
 from aiohttp import web
 from PIL import Image, ImageOps
 from server import PromptServer
@@ -28,15 +27,15 @@ class CardbooruPositive:
     @classmethod
     def INPUT_TYPES(cls):
         return {'required': {
-            'library_root': ('STRING', {'default': '', 'tooltip': 'Library folder or full card path on the server. Leave empty to use ComfyUI/input.'}),
+            'library_root': ('STRING', {'default': '', 'tooltip': 'Library folder or full card path on the server.'}),
             'card': ('STRING', {'default': '', 'tooltip': 'Relative path of the selected card.'}),
         }, 'optional': {
-            'use_edited_prompt': ('BOOLEAN', {'default': False, 'tooltip': 'Use the editable text instead of the embedded card prompt. Editing enables this automatically.'}),
+            'use_edited_prompt': ('BOOLEAN', {'default': True, 'tooltip': 'Use the editable text instead of the embedded card prompt. Editing enables this automatically.'}),
             'positive_prompt': ('STRING', {'default': '', 'multiline': True, 'tooltip': 'Edit the positive for this workflow. The card PNG is never modified.'}),
         }}
 
     def selected_card(self, library_root, card):
-        root = resolve_root(library_root, folder_paths.get_input_directory())
+        root = resolve_root(library_root)
         if not card:
             raise ValueError('Select a card using Library')
         selected = contained(root, card)
@@ -73,7 +72,7 @@ class CardbooruPrompts(CardbooruPositive):
     def INPUT_TYPES(cls):
         inputs = super().INPUT_TYPES()
         inputs['optional'].update({
-            'use_edited_negative': ('BOOLEAN', {'default': False, 'tooltip': 'Use the edited negative instead of card metadata. Editing enables this automatically.'}),
+            'use_edited_negative': ('BOOLEAN', {'default': True, 'tooltip': 'Use the edited negative instead of card metadata. Editing enables this automatically.'}),
             'negative_prompt': ('STRING', {'default': '', 'multiline': True, 'tooltip': 'Edit the negative for this workflow. Cards without a negative start empty. The PNG is never modified.'}),
         })
         return inputs
@@ -106,8 +105,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'CardbooruConcatenate4': 'Concatenate · x4',
     'CardbooruPositive': 'Cardbooru · Positive',
     'CardbooruPrompts': 'Cardbooru · Positive + Negative',
-    'CardbooruConcatenateSpaces': 'Concatenate · Anima Advanced',
-    'CardbooruConcatenateAnima': 'Concatenate · Anima',
+    'CardbooruConcatenateSpaces': 'Concatenate · Clean Advanced',
+    'CardbooruConcatenateAnima': 'Concatenate · Clean',
     'CardbooruConcatenateAnima3': 'Concatenate · Anima 3',
     'CardbooruConcatenateAnima3Advanced': 'Concatenate · Anima 3 Advanced',
     'CardbooruLoadImagePrompts': 'Cardbooru · Load Image + Prompts',
@@ -115,7 +114,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 
 
 def root_for(request):
-    return resolve_root(request.query.get('root', ''), folder_paths.get_input_directory())
+    return resolve_root(request.query.get('root', ''))
 
 
 @PromptServer.instance.routes.get('/cardbooru/image-prompts')
