@@ -45,11 +45,11 @@ def prepare_prompts(image, sampler_id='', replace_underscores=True, preserve_sco
 
 
 class CardbooruLoadImagePrompts:
-    CATEGORY = 'Cardbooru'
+    CATEGORY = 'Cardbooru/Tools'
     FUNCTION = 'load_image'
     RETURN_TYPES = ('IMAGE', 'MASK', 'STRING', 'STRING')
     RETURN_NAMES = ('image', 'mask', 'positive', 'negative')
-    DESCRIPTION = 'Load an image and reconstruct saved positive/negative prompts. Optional Anima cleanup and editable workflow-local overrides.'
+    DESCRIPTION = 'Load an image and recover its saved prompts.'
 
     @classmethod
     def INPUT_TYPES(cls):

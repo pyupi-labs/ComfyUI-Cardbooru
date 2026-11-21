@@ -4,7 +4,7 @@ import { styleButton } from "./button_style.js";
 app.registerExtension({
     name: "cardbooru.animaPreview",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (!["CardbooruConcatenateSpaces", "CardbooruConcatenateAnima3Advanced", "CardbooruLoadImagePrompts"].includes(nodeData.name)) return;
+        if (!["CardbooruConcatenateAnima", "CardbooruConcatenateSpaces", "CardbooruConcatenateAnima3Advanced", "CardbooruLoadImagePrompts"].includes(nodeData.name)) return;
         const imageLoader = nodeData.name === "CardbooruLoadImagePrompts";
         const created = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {

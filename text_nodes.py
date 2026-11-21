@@ -63,11 +63,11 @@ def merge_count_tags(fields):
 
 
 class CardbooruConcatenateSpaces:
-    CATEGORY = 'Cardbooru/Text'
+    CATEGORY = 'Cardbooru/Concatenate'
     FUNCTION = 'execute'
     RETURN_TYPES = ('STRING',)
     RETURN_NAMES = ('text',)
-    DESCRIPTION = 'Join prompt strings, replace underscores, clean commas, and merge character counts. Preserves Anima score tags by default.'
+    DESCRIPTION = 'Join two prompts with configurable cleanup.'
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -104,8 +104,11 @@ class CardbooruConcatenateSpaces:
 
 
 class CardbooruConcatenateAnima(CardbooruConcatenateSpaces):
-    FUNCTION = 'concatenate'
-    DESCRIPTION = 'Join prompt strings, convert underscores to spaces, preserve score tags, clean commas, and merge character counts.'
+    DESCRIPTION = 'Join and clean up two prompts.'
+
+    def execute(self, string_a='', string_b='', delimiter=''):
+        result = self.concatenate(string_a, string_b, delimiter)
+        return {'ui': {'text': [result[0]]}, 'result': result}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -160,11 +163,11 @@ class CardbooruConcatenateAnima3(CardbooruConcatenateAnima3Advanced):
 
 
 class CardbooruConcatenate3:
-    CATEGORY = 'Cardbooru/Text'
+    CATEGORY = 'Cardbooru/Concatenate'
     FUNCTION = 'concatenate'
     RETURN_TYPES = ('STRING',)
     RETURN_NAMES = ('text',)
-    DESCRIPTION = 'Join three strings exactly in A, B, C order. No cleanup or tag changes.'
+    DESCRIPTION = 'Join three strings in order without cleanup.'
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -178,7 +181,7 @@ class CardbooruConcatenate3:
 
 
 class CardbooruConcatenate4(CardbooruConcatenate3):
-    DESCRIPTION = 'Join four strings exactly in A, B, C, D order. No cleanup or tag changes.'
+    DESCRIPTION = 'Join four strings in order without cleanup.'
 
     @classmethod
     def INPUT_TYPES(cls):

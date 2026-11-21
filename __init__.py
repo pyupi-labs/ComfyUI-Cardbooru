@@ -1,6 +1,7 @@
 """Independent Cardbooru positive and dual-prompt custom nodes."""
 import asyncio
 import io
+import re
 from collections import OrderedDict
 from pathlib import Path
 from threading import RLock
@@ -13,13 +14,34 @@ from .core import catalog, contained, describe, identity, read_card, read_metada
 from .text_nodes import CardbooruConcatenateAnima, CardbooruConcatenateSpaces
 from .text_nodes import CardbooruConcatenateAnima3, CardbooruConcatenateAnima3Advanced
 from .text_nodes import CardbooruConcatenate3, CardbooruConcatenate4
+from .text_nodes import split_prompt_fields
 from .image_prompt_node import CardbooruLoadImagePrompts, prepare_prompts
+from .control_panel import CardbooruControlPanel
+from .image_size import CardbooruImageSize
 
 WEB_DIRECTORY = './web'
 
 
+def with_copyright(prompt, series, enabled, original=''):
+    if not enabled:
+        return prompt
+    tag = series.strip().lower()
+    fields = split_prompt_fields(prompt)
+    if not tag or any(field.strip().lower() == tag for field in fields):
+        return prompt
+    character = next((field.strip().lower() for field in split_prompt_fields(original)
+                      if field.strip() and not re.fullmatch(r'\d+(?:girls?|boys?|others?)', field.strip(), re.I)), '')
+    index = next((i for i, field in enumerate(fields) if character and field.strip().lower() == character), None)
+    if index is None:
+        index = next((i for i, field in enumerate(fields) if field.strip()
+                      and not re.fullmatch(r'\d+(?:girls?|boys?|others?)', field.strip(), re.I)), len(fields) - 1)
+    fields.insert(index + 1, tag)
+    return ', '.join(field.strip() for field in fields if field.strip())
+
+
 class CardbooruPositive:
-    CATEGORY = 'Cardbooru'
+    DESCRIPTION = 'Get the positive prompt from a character card.'
+    CATEGORY = 'Cardbooru/Tools'
     FUNCTION = 'positive'
     RETURN_TYPES = ('STRING',)
     RETURN_NAMES = ('positive',)
@@ -31,6 +53,7 @@ class CardbooruPositive:
             'card': ('STRING', {'default': '', 'tooltip': 'Relative path of the selected card.'}),
         }, 'optional': {
             'use_edited_prompt': ('BOOLEAN', {'default': True, 'tooltip': 'Use the editable text instead of the embedded card prompt. Editing enables this automatically.'}),
+            'use_copyright': ('BOOLEAN', {'default': False, 'tooltip': 'Insert the lowercase card series after the character tag.'}),
             'positive_prompt': ('STRING', {'default': '', 'multiline': True, 'tooltip': 'Edit the positive for this workflow. The card PNG is never modified.'}),
         }}
 
@@ -46,7 +69,7 @@ class CardbooruPositive:
             raise ValueError('Card is missing, invalid, or has conflicting duplicates. Refresh the library.')
         return read_card(selected)
 
-    def positive(self, library_root, card, use_edited_prompt=False, positive_prompt=''):
+    def positive(self, library_root, card, use_edited_prompt=False, positive_prompt='', use_copyright=False):
         if not card:
             return ('',)
         selected = self.selected_card(library_root, card)
@@ -54,8 +77,8 @@ class CardbooruPositive:
         if use_edited_prompt:
             if not isinstance(positive_prompt, str):
                 raise ValueError('The edited positive prompt must be a string.')
-            return (positive_prompt,)
-        return (selected['positive'],)
+        prompt = positive_prompt if use_edited_prompt else selected['positive']
+        return (with_copyright(prompt, selected['series'], use_copyright, selected['positive']),)
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -64,6 +87,7 @@ class CardbooruPositive:
 
 
 class CardbooruPrompts(CardbooruPositive):
+    DESCRIPTION = 'Get the positive and negative prompts from a character card.'
     FUNCTION = 'prompts'
     RETURN_TYPES = ('STRING', 'STRING')
     RETURN_NAMES = ('positive', 'negative')
@@ -78,7 +102,7 @@ class CardbooruPrompts(CardbooruPositive):
         return inputs
 
     def prompts(self, library_root, card, use_edited_prompt=False, positive_prompt='',
-                use_edited_negative=False, negative_prompt=''):
+                use_edited_negative=False, negative_prompt='', use_copyright=False):
         if not card:
             return ('', '')
         selected = self.selected_card(library_root, card)
@@ -86,10 +110,12 @@ class CardbooruPrompts(CardbooruPositive):
         negative = negative_prompt if use_edited_negative else selected['negative']
         if not isinstance(positive, str) or not isinstance(negative, str):
             raise ValueError('Positive and negative prompts must be strings.')
-        return (positive, negative)
+        return (with_copyright(positive, selected['series'], use_copyright, selected['positive']), negative)
 
 
 NODE_CLASS_MAPPINGS = {
+    'CardbooruControlPanel': CardbooruControlPanel,
+    'CardbooruImageSize': CardbooruImageSize,
     'CardbooruConcatenate3': CardbooruConcatenate3,
     'CardbooruConcatenate4': CardbooruConcatenate4,
     'CardbooruPositive': CardbooruPositive,
@@ -101,6 +127,8 @@ NODE_CLASS_MAPPINGS = {
     'CardbooruLoadImagePrompts': CardbooruLoadImagePrompts,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    'CardbooruControlPanel': 'Cardbooru · Control Panel',
+    'CardbooruImageSize': 'Cardbooru · Image Size',
     'CardbooruConcatenate3': 'Concatenate · x3',
     'CardbooruConcatenate4': 'Concatenate · x4',
     'CardbooruPositive': 'Cardbooru · Positive',

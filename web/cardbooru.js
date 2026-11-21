@@ -5,6 +5,22 @@ import { styleButton } from "./button_style.js";
 const normalize = (text) => text.normalize("NFKC").replaceAll("_", " ").trim().replace(/\s+/g, " ").toLowerCase();
 // Use Python's Unicode casefold identity consistently, including ß/ss.
 const group = (c) => JSON.stringify(c.group_key);
+const promptFields = text => {
+    const fields = [];
+    const stack = [];
+    let start = 0, escaped = false;
+    const pairs = {")": "(", "]": "[", "}": "{"};
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (escaped) { escaped = false; continue; }
+        if (char === "\\") { escaped = true; continue; }
+        if ("([{".includes(char)) stack.push(char);
+        else if (pairs[char] && stack.at(-1) === pairs[char]) stack.pop();
+        if (char === "," && !stack.length) { fields.push(text.slice(start, i)); start = i + 1; }
+    }
+    fields.push(text.slice(start));
+    return fields;
+};
 const element = (tag, text, parent) => {
     const el = document.createElement(tag);
     if (text) el.textContent = text;
@@ -28,6 +44,18 @@ app.registerExtension({
             // Keep the serialized input name for existing workflows and API prompts.
             edited.label = "use_edited_positive";
             const prompt = node.widgets.find((w) => w.name === "positive_prompt");
+            const copyright = node.widgets.find((w) => w.name === "use_copyright");
+            // Change visual order while preserving serialized widget positions.
+            const layoutWidgets = node.getLayoutWidgets;
+            node.getLayoutWidgets = function () {
+                const widgets = [...layoutWidgets.apply(this, arguments)];
+                const index = widgets.indexOf(copyright);
+                if (index !== -1 && widgets.includes(selected)) {
+                    widgets.splice(index, 1);
+                    widgets.splice(widgets.indexOf(selected) + 1, 0, copyright);
+                }
+                return widgets;
+            };
             const editors = [{key: "positive", prompt, edited}];
             if (combined) editors.push({
                 key: "negative",
@@ -82,13 +110,52 @@ app.registerExtension({
             }
             node.size = [420, combined ? 460 : 340];
             function setPrompt(editor, value) {
-                editor.prompt.value = value;
-                if (editor.prompt.inputEl) editor.prompt.inputEl.value = value;
+                editor.updating = true;
+                try {
+                    editor.prompt.value = value;
+                    if (editor.prompt.inputEl) editor.prompt.inputEl.value = value;
+                } finally {
+                    editor.updating = false;
+                }
             }
+            function setEmbeddedPrompt(editor, value) {
+                if (editor.key === "positive") delete node.properties.cardbooruCopyrightPrefix;
+                setPrompt(editor, value);
+            }
+            function updateCopyright() {
+                const prefix = node.properties.cardbooruCopyrightPrefix;
+                let value = prompt.value ?? "";
+                let fields = promptFields(value);
+                const previousIndex = prefix ? fields.findIndex(field => field.trim() === prefix) : -1;
+                if (previousIndex !== -1) fields.splice(previousIndex, 1);
+                delete node.properties.cardbooruCopyrightPrefix;
+
+                const tag = currentCard?.series?.trim().toLowerCase();
+                if (copyright.value && tag && !fields.some(field => field.trim().toLowerCase() === tag)) {
+                    const isCount = field => /^\d+(girls?|boys?|others?)$/i.test(field.trim());
+                    const character = promptFields(currentCard.positive).find(field => field.trim() && !isCount(field))?.trim().toLowerCase();
+                    let index = fields.findIndex(field => character && field.trim().toLowerCase() === character);
+                    if (index === -1) index = fields.findIndex(field => field.trim() && !isCount(field));
+                    if (index === -1) index = fields.length - 1;
+                    node.properties.cardbooruCopyrightPrefix = tag;
+                    fields.splice(index + 1, 0, tag);
+                }
+                if (previousIndex !== -1 || node.properties.cardbooruCopyrightPrefix) {
+                    value = fields.map(field => field.trim()).filter(Boolean).join(", ");
+                }
+                setPrompt(editors[0], value);
+                node.graph?.setDirtyCanvas(true, true);
+            }
+            const copyrightCallback = copyright.callback;
+            copyright.callback = function () {
+                copyrightCallback?.apply(this, arguments);
+                if (currentCard) updateCopyright();
+            };
             for (const editor of editors) {
                 const promptCallback = editor.prompt.callback;
                 editor.prompt.callback = function () {
                     promptCallback?.apply(this, arguments);
+                    if (editor.updating) return;
                     editor.edited.value = true;
                     editor.editVersion++;
                     node.graph?.setDirtyCanvas(true, true);
@@ -97,13 +164,30 @@ app.registerExtension({
                 editor.edited.callback = function () {
                     editedCallback?.apply(this, arguments);
                     editor.editVersion++;
-                    if (!editor.edited.value && currentCard) setPrompt(editor, currentCard[editor.key] ?? "");
+                    if (!currentCard) return;
+                    const drafts = node.properties.cardbooruPromptDrafts ??= {};
+                    if (!editor.edited.value) {
+                        drafts[editor.key] = {text: editor.prompt.value,
+                            prefix: editor.key === "positive" ? node.properties.cardbooruCopyrightPrefix : undefined};
+                        setEmbeddedPrompt(editor, currentCard[editor.key] ?? "");
+                        if (editor.key === "positive") updateCopyright();
+                    } else if (drafts[editor.key]) {
+                        const draft = drafts[editor.key];
+                        setPrompt(editor, draft.text);
+                        if (editor.key === "positive") {
+                            node.properties.cardbooruCopyrightPrefix = draft.prefix;
+                            updateCopyright();
+                        }
+                    }
+                    node.graph?.setDirtyCanvas(true, true);
                 };
             }
             function resetEditor(editor) {
                 if (!currentCard) return;
                 editor.editVersion++;
-                setPrompt(editor, currentCard[editor.key] ?? "");
+                delete node.properties.cardbooruPromptDrafts?.[editor.key];
+                setEmbeddedPrompt(editor, currentCard[editor.key] ?? "");
+                if (editor.key === "positive") updateCopyright();
                 node.graph?.setDirtyCanvas(true, true);
             }
             reset.onclick = () => resetEditor(editors[0]);
@@ -129,10 +213,11 @@ app.registerExtension({
                 picker?.close();
                 selected.value = "";
                 delete node.properties.cardbooruPromptSource;
+                delete node.properties.cardbooruPromptDrafts;
                 node.properties.cardbooruSelectionCleared = true;
                 for (const editor of editors) {
                     editor.editVersion++;
-                    setPrompt(editor, "");
+                    setEmbeddedPrompt(editor, "");
                 }
                 clear();
                 status.textContent = "Selection cleared. Choose another card from Library or drop a PNG.";
@@ -144,11 +229,13 @@ app.registerExtension({
                 for (const editor of editors) {
                     if (versions && versions[editor.key] !== editor.editVersion) continue;
                     if (reloadPrompts || !sameSource || !editor.edited.value) {
-                        setPrompt(editor, c[editor.key] ?? "");
+                        if (reloadPrompts || !sameSource) delete node.properties.cardbooruPromptDrafts?.[editor.key];
+                        setEmbeddedPrompt(editor, c[editor.key] ?? "");
                     }
                 }
                 node.properties.cardbooruPromptSource = {root: root.value || "", card: c.path};
                 currentCard = c;
+                updateCopyright();
                 selected.value = c.path;
                 node.properties.cardbooruSelectionCleared = false;
                 label.textContent = `${c.character} / ${c.variant || "No variant"} / ${c.series}`;
@@ -256,9 +343,27 @@ app.registerExtension({
                     if (!disposed && ticket === revision) choose(data.card);
                 } catch (error) { if (!disposed && ticket === revision) status.textContent = error.message; }
             });
+            const serialize = node.onSerialize;
+            node.onSerialize = function (info) {
+                serialize?.apply(this, arguments);
+                info.cardbooruCopyrightWidget = true;
+            };
             const configured = node.onConfigure;
-            node.onConfigure = function () {
+            node.onConfigure = function (info) {
                 configured?.apply(this, arguments);
+                const values = info?.widgets_values;
+                if (values && !info.cardbooruCopyrightWidget) {
+                    // Older workflows saved values before the copyright toggle was added.
+                    const index = node.widgets.indexOf(copyright);
+                    copyright.value = false;
+                    for (let i = index + 1; i < node.widgets.length; i++) {
+                        const widget = node.widgets[i];
+                        if (widget === preview || values[i - 1] === undefined) continue;
+                        const editor = editors.find((entry) => entry.prompt === widget);
+                        if (editor) setPrompt(editor, values[i - 1]);
+                        else widget.value = values[i - 1];
+                    }
+                }
                 load();
             };
             const removed = node.onRemoved;
