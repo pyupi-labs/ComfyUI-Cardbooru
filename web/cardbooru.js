@@ -1,9 +1,38 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { styleButton } from "./button_style.js";
-import { closeOnBackdropClick } from "./dialog.js";
+import { closeOnBackdropClick, forwardWidgetWheel } from "./dialog.js";
 
 const normalize = (text) => text.normalize("NFKC").replaceAll("_", " ").trim().replace(/\s+/g, " ").toLowerCase();
+const displayPath = (path) => path.replaceAll("/", "\\");
+
+function drawCardPath({ctx, width, leftPadding = 0, rightPadding = 0}) {
+    const left = 2 * (this.constructor.margin ?? 10) + leftPadding;
+    const right = width - 2 * (this.constructor.margin ?? 10) - rightPadding;
+    const baseline = this.y + this.height * 0.7;
+    const label = this.displayName;
+    const available = right - left - ctx.measureText(label).width - 10;
+    let path = displayPath(this._displayValue ?? this.value ?? "");
+    if (ctx.measureText(path).width > available) {
+        const suffix = "...";
+        const characters = Array.from(path);
+        let first = 0;
+        let last = characters.length;
+        while (first < last) {
+            const length = Math.ceil((first + last) / 2);
+            const candidate = characters.slice(0, length).join("") + suffix;
+            if (ctx.measureText(candidate).width <= available) first = length;
+            else last = length - 1;
+        }
+        path = ctx.measureText(suffix).width <= available ? characters.slice(0, first).join("") + suffix : "";
+    }
+    ctx.textAlign = "left";
+    ctx.fillStyle = this.secondary_text_color;
+    ctx.fillText(label, left, baseline);
+    ctx.textAlign = "right";
+    ctx.fillStyle = this.text_color;
+    ctx.fillText(path, right, baseline);
+}
 // Use Python's Unicode casefold identity consistently, including ß/ss.
 const group = (c) => JSON.stringify(c.group_key);
 const promptFields = text => {
@@ -41,6 +70,7 @@ app.registerExtension({
             const node = this;
             const root = node.widgets.find((w) => w.name === "library_root");
             const selected = node.widgets.find((w) => w.name === "card");
+            if (typeof selected.drawTruncatingText === "function") selected.drawTruncatingText = drawCardPath;
             const edited = node.widgets.find((w) => w.name === "use_edited_prompt");
             // Keep the serialized input name for existing workflows and API prompts.
             edited.label = "use_edited_positive";
@@ -68,6 +98,7 @@ app.registerExtension({
             let cards = [], revision = 0, picker = null, disposed = false;
             let currentCard = null;
             const box = element("div");
+            forwardWidgetWheel(box, app);
             box.style.cssText = "color:var(--input-text,#eee);padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;width:100%;min-width:0;max-width:none;height:100%;font:13px system-ui";
             const controls = element("div", "", box);
             controls.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0";
@@ -90,13 +121,18 @@ app.registerExtension({
             label.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0";
             const image = element("img", "", box);
             image.alt = "Card preview";
-            image.style.cssText = "width:100%;min-width:0;min-height:0;flex:1 1 0;object-fit:contain;object-position:center;display:none";
+            image.style.cssText = "width:100%;min-width:0;min-height:0;flex:1 1 0;object-fit:contain;object-position:center;image-rendering:auto;display:none";
             const libraryHint = () => root.value?.trim() ? "Drop a PNG from the configured library here." : "Set library_root to browse cards.";
             const status = element("div", libraryHint(), box);
             status.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:16px;height:32px;overflow:auto;flex-shrink:0";
-            const preview = node.addDOMWidget("cardbooru_preview", "cardbooru", box, { serialize: false });
+            const preview = node.addDOMWidget("cardbooru_preview", "cardbooru", box, {
+                serialize: false,
+                afterResize: () => { preview.width = node.size[0]; },
+            });
             preview.computeLayoutSize = () => {
                 const width = node.size[0];
+                // The canvas overlay uses the widget width before subtracting its margins.
+                preview.width = width;
                 const imageSpace = currentCard ? Math.round(Math.min(440, Math.max(180, width * 0.62))) : 0;
                 const buttonSpace = controls.offsetHeight || 62;
                 const minHeight = buttonSpace + 84 + imageSpace;
@@ -194,7 +230,7 @@ app.registerExtension({
             reset.onclick = () => resetEditor(editors[0]);
             if (resetNegative) resetNegative.onclick = () => resetEditor(editors[1]);
             const query = (extra = {}) => new URLSearchParams({root: root.value || "", ...extra});
-            const thumb = (c) => api.apiURL(`/cardbooru/thumbnail?${query({card: c.path})}`);
+            const cardImage = (path, options = {}) => api.apiURL(`/cardbooru/thumbnail?${query({card: path, ...options})}`);
             async function request(path, options) {
                 const response = await api.fetchApi(path, options);
                 const data = await response.json();
@@ -224,7 +260,7 @@ app.registerExtension({
                 status.textContent = "Selection cleared. Choose another card from Library or drop a PNG.";
                 node.graph?.setDirtyCanvas(true, true);
             };
-            function choose(c, reloadPrompts = false, versions = null) {
+            function choose(c, reloadPrompts = false, versions = null, path = c.path) {
                 const source = node.properties.cardbooruPromptSource;
                 const sameSource = source?.root === (root.value || "") && source?.card === c.path;
                 for (const editor of editors) {
@@ -237,11 +273,11 @@ app.registerExtension({
                 node.properties.cardbooruPromptSource = {root: root.value || "", card: c.path};
                 currentCard = c;
                 updateCopyright();
-                selected.value = c.path;
+                selected.value = path;
                 node.properties.cardbooruSelectionCleared = false;
                 label.textContent = `${c.character} / ${c.variant || "No variant"} / ${c.series}`;
                 label.title = label.textContent;
-                image.src = thumb(c); image.style.display = "block";
+                image.src = cardImage(path, {full: "1"}); image.style.display = "block";
                 const minimum = node.computeSize?.();
                 if (minimum && minimum[1] > node.size[1]) node.setSize([node.size[0], minimum[1]]);
                 const count = cards.filter((other) => group(other) === group(c)).length;
@@ -264,7 +300,10 @@ app.registerExtension({
                     cards = data.cards;
                     const current = cards.find((c) => c.path === selected.value || c.copies.includes(selected.value)) ||
                         (!node.properties.cardbooruSelectionCleared && cards.find((c) => c.path === data.initial_card));
-                    if (current) choose(current, reloadPrompts, versions);
+                    if (current) {
+                        const path = current.copies.includes(selected.value) ? selected.value : current.path;
+                        choose(current, reloadPrompts, versions, path);
+                    }
                     status.textContent = `${cards.length} cards · ${data.root}` +
                         (data.issues.length ? `\n${data.issues.join("\n")}` : "") +
                         (!current && selected.value ? "\nThe saved selection is no longer available." : "");
@@ -274,10 +313,16 @@ app.registerExtension({
                     return false;
                 }
             }
-            function showPicker() {
+            function showPicker(byPath = false) {
                 picker?.close();
                 const dialog = picker = element("dialog");
-                dialog.style.cssText = "width:min(900px,90vw);height:80vh;background:#201b25;color:#eee;border:1px solid #80658c;border-radius:12px;padding:18px";
+                const palette = node.getColorOption?.();
+                dialog.style.cssText = "width:min(900px,90vw);height:80vh;background:#202020;color:#eee;border:1px solid #666;border-radius:3px;padding:18px";
+                const defaultGray = (!node.color || node.color === "#333") &&
+                    (!node.bgcolor || node.bgcolor === "#353535");
+                dialog.style.backgroundColor = palette?.bgcolor ?? (defaultGray ? "#353535" : "#202020");
+                if (byPath) dialog.style.cssText += ";width:min(540px,85vw);height:auto;max-height:60vh";
+                dialog.setAttribute("aria-label", byPath ? "Choose a card by path" : "Cardbooru Library");
                 closeOnBackdropClick(dialog);
                 const toolbar = element("div", "", dialog);
                 toolbar.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px";
@@ -285,21 +330,43 @@ app.registerExtension({
                 styleButton(close);
                 close.onclick = () => dialog.close();
                 const search = element("input", "", toolbar);
-                search.placeholder = "Search character, variant, or series";
+                search.placeholder = byPath ? "Filter by folder or filename" : "Search character, variant, or series";
                 search.setAttribute("aria-label", search.placeholder);
                 search.style.cssText = "box-sizing:border-box;flex:1;min-width:0;height:28px;padding:4px 9px;background:var(--comfy-input-bg,#262626);color:var(--input-text,#eee);border:1px solid var(--border-color,#666);border-radius:4px;font:inherit;font-size:13px";
+                search.style.borderColor = dialog.style.borderColor;
+                search.style.outlineColor = "#999";
                 const grid = element("div", "", dialog);
                 grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px";
+                if (byPath) grid.style.cssText = "display:grid;grid-template-columns:minmax(0,1fr);gap:4px;max-height:calc(60vh - 64px);overflow:auto";
+                const paths = byPath ? cards.flatMap((card) => card.copies.map((path) => ({
+                    card, path, label: displayPath(path),
+                }))).sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true})) : [];
+                let matches = [];
+                function selectPath({card, path}) {
+                    choose(card, false, null, path);
+                    node.graph?.incrementVersion?.();
+                    dialog.close();
+                }
                 function render() {
                     grid.replaceChildren();
                     const term = normalize(search.value);
+                    if (byPath) {
+                        matches = paths.filter(({path}) => normalize(path).includes(term.replaceAll("\\", "/")));
+                        for (const entry of matches) {
+                            const button = element("button", entry.label, grid);
+                            button.style.cssText += ";text-align:left;white-space:normal;overflow-wrap:anywhere";
+                            button.onclick = () => selectPath(entry);
+                        }
+                        if (!matches.length) element("p", "No matching cards found.", grid);
+                        return;
+                    }
                     const found = cards.filter((c) => normalize(`${c.character} ${c.variant} ${c.series}`).includes(term));
                     for (const c of found) {
                         const button = element("button", "", grid);
-                        button.style.cssText = "padding:8px;background:#302838;color:#eee;border:1px solid #80658c;cursor:pointer";
+                        button.style.cssText = "padding:8px";
                         styleButton(button, true);
                         const img = element("img", "", button);
-                        img.loading = "lazy"; img.src = thumb(c); img.alt = c.character;
+                        img.loading = "lazy"; img.src = cardImage(c.path); img.alt = c.character;
                         img.style.cssText = "width:100%;height:170px;object-fit:contain";
                         element("div", `${c.character} · ${c.variant || "No variant"}`, button);
                         element("small", c.series, button);
@@ -308,13 +375,23 @@ app.registerExtension({
                     if (!found.length) element("p", "No matching cards found.", grid);
                 }
                 search.oninput = render;
+                search.onkeydown = (event) => {
+                    if (!byPath || event.isComposing || event.key !== "Enter" || !matches.length) return;
+                    event.preventDefault();
+                    selectPath(matches[0]);
+                };
                 dialog.onclose = () => { dialog.remove(); if (picker === dialog) picker = null; };
                 document.body.append(dialog); render(); dialog.showModal(); search.focus();
             }
             open.onclick = async () => { if (await load()) showPicker(); };
+            const cardClick = selected.onClick;
+            selected.onClick = async function (event) {
+                if (event?.e?.shiftKey && cardClick) return cardClick.apply(this, arguments);
+                if (await load()) showPicker(true);
+            };
             refresh.onclick = () => load({reloadPrompts: true});
             function cycle(delta) {
-                const current = cards.find((c) => c.path === selected.value);
+                const current = currentCard;
                 if (!current) return;
                 const variants = cards.filter((c) => group(c) === group(current));
                 choose(variants[(variants.indexOf(current) + delta + variants.length) % variants.length]);

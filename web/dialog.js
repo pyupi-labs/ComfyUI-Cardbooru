@@ -1,3 +1,12 @@
+export function forwardWidgetWheel(element, app) {
+    element.addEventListener("wheel", (event) => {
+        const canvas = app.canvas;
+        if (event.defaultPrevented || !canvas?.processMouseWheel) return;
+        event.stopPropagation();
+        canvas.processMouseWheel(event);
+    }, {passive: false});
+}
+
 export function closeOnBackdropClick(dialog) {
     function isBackdrop(event) {
         if (event.target !== dialog) return false;

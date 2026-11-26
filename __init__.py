@@ -210,10 +210,11 @@ def thumbnail(path):
             _thumbnails.move_to_end(key)
             return _thumbnails[key]
     with Image.open(path) as image:
-        image = ImageOps.exif_transpose(image)
-        image.thumbnail((320, 448))
+        # Pillow uses nearest-neighbor resizing for palette-mode images.
+        image = ImageOps.exif_transpose(image).convert('RGBA')
+        image.thumbnail((320, 448), Image.Resampling.LANCZOS)
         output = io.BytesIO()
-        image.convert('RGBA').save(output, format='PNG')
+        image.save(output, format='PNG')
     with _thumbnail_lock:
         _thumbnails[key] = output.getvalue()
         while len(_thumbnails) > 128:
@@ -227,6 +228,8 @@ async def preview(request):
         path = contained(root_for(request), request.query.get('card', ''))
         # Only expose validated cards, not arbitrary images outside the catalog format.
         await asyncio.to_thread(read_card, path)
+        if request.query.get('full') == '1':
+            return web.FileResponse(path, headers={'Content-Type': 'image/png', 'Cache-Control': 'no-cache'})
         data = await asyncio.to_thread(thumbnail, path)
         return web.Response(body=data, content_type='image/png', headers={'Cache-Control': 'no-store'})
     except (ValueError, OSError, TypeError, AttributeError) as exc:

@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { styleButton } from "./button_style.js";
+import { forwardWidgetWheel } from "./dialog.js";
 
 app.registerExtension({
     name: "cardbooru.imagePrompts",
@@ -18,6 +19,7 @@ app.registerExtension({
             let revision = 0, disposed = false;
             let imageReloadQueued = false;
             const box = document.createElement("div");
+            forwardWidgetWheel(box, app);
             box.style.cssText = "padding:8px;box-sizing:border-box;height:100%;overflow:auto;color:var(--input-text,#eee)";
             const refresh = document.createElement("button");
             refresh.textContent = "Refresh";
