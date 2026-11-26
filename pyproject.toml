@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-cardbooru"
+description = "Browse PNG character cards, reuse embedded prompts, and format prompt text in ComfyUI."
+version = "0.1.0"
+# ComfyUI already provides Pillow and aiohttp.
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/pyupi-labs/ComfyUI-Cardbooru"
+Documentation = "https://github.com/pyupi-labs/ComfyUI-Cardbooru#readme"
+
+[tool.comfy]
+PublisherId = "pyupi"
+DisplayName = "ComfyUI-Cardbooru"
+Icon = "https://raw.githubusercontent.com/pyupi-labs/ComfyUI-Cardbooru/main/assets/icon.svg"
